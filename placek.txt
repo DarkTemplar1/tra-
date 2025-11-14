@@ -1,151 +1,121 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
+color 0A
 
-rem ================== KONFIG ==================
-set "TARGET=PriceBot.pyz"
-set "BUILDER=make_pricebot_pyz.py"
-set "LOG=build.log"
-set "REQUIRED_MODS=pandas,requests,beautifulsoup4,numpy,openpyxl"
-rem ===========================================
+rem =====================================================
+rem     BUILD PriceBot.exe — wersja z PyInstallerem
+rem =====================================================
 
-rem --- log helper ---
-echo ==== BUILD START %DATE% %TIME% ==== > "%LOG%"
-for /f "delims=" %%A in ('echo %CD%') do set "CWD=%%~A"
+set "APP_NAME=PriceBot"
+set "ENTRY_FILE=selektor_csv.py"
+set "LOG_FILE=build.log"
 
-call :LOG "Katalog projektu: %CWD%"
-call :LOG "Log: %LOG%"
-call :LOG "Docelowy plik: %TARGET%"
-call :LOG "Builder: %BUILDER%"
+echo =====================================================
+echo     BUILD %APP_NAME%.exe
+echo =====================================================
+echo.
 
-rem --- 1) test zapisu w katalogu projektu ---
+echo [1] Tworzę log: %LOG_FILE%
+echo ==== BUILD START %DATE% %TIME% ==== > "%LOG_FILE%"
+
+rem --- sprawdzenie zapisu ---
 set "TMPFILE=__write_test__.tmp"
 2>nul ( > "%TMPFILE%" echo test ) || (
-  call :ERR "Brak uprawnień do zapisu w katalogu: %CWD%"
-  call :HINT "Uruchom terminal jako Administrator albo wybierz katalog użytkownika (np. Documents)."
+  echo [ERR] Brak uprawnień do zapisu w %CD%
+  echo [ERR] Uruchom CMD jako Administrator lub przenieś projekt do np. C:\dev\
   exit /b 1
 )
-del /q "%TMPFILE%" >nul 2>&1
+del "%TMPFILE%" >nul 2>&1
 
-rem --- 2) ostrzeżenia dot. ścieżki (długość, OneDrive, polskie znaki) ---
-set "LEN=0"
-for /f "delims=" %%L in ('powershell -NoProfile -Command "$pwd.Path.Length"') do set "LEN=%%L"
-if not "%LEN%"=="" (
-  if %LEN% GEQ 200 (
-    call :WARN "Bardzo długa ścieżka (%LEN% znaków). Windows miewa problemy > ~240 znaków."
-    call :HINT "Przenieś projekt bliżej root (np. C:\dev\PriceBot)."
-  )
+rem --- sprawdź ścieżkę ---
+echo %CD% | findstr /I "OneDrive" >nul && (
+  echo [WARN] Projekt jest w OneDrive — to może blokować zapis.
+  echo [WARN] Zalecane: przenieś projekt np. do C:\PriceBot
 )
 
-echo %CWD% | findstr /I "OneDrive" >nul && (
-  call :WARN "Wykryto OneDrive w ścieżce. Pliki mogą być blokowane przez synchronizację."
-  call :HINT "Rozważ przeniesienie projektu poza OneDrive."
-)
-
-echo %CWD% | findstr /R /V "^[ -~]*$" >nul && (
-  call :WARN "W ścieżce są znaki spoza ASCII (np. polskie). Czasem sprawia to problemy narzędziom."
-  call :HINT "Jeśli budowa się nie powiedzie, spróbuj ścieżki bez znaków narodowych."
-)
-
-rem --- 3) znajdź Pythona ---
+rem --- znajdź Pythona ---
 set "PYEXE="
 where py >nul 2>&1 && set "PYEXE=py -3"
+if "%PYEXE%"=="" where python >nul 2>&1 && set "PYEXE=python"
 if "%PYEXE%"=="" (
-  where python >nul 2>&1 && set "PYEXE=python"
-)
-if "%PYEXE%"=="" (
-  call :ERR "Nie znaleziono Pythona w PATH."
-  call :HINT "Zainstaluj Python 3.10+ i dodaj do PATH, albo użyj 'py -3'."
+  echo [ERR] Nie znaleziono Pythona w PATH.
+  echo [ERR] Zainstaluj Python 3.10+ i dodaj do PATH.
   exit /b 1
 )
+echo [OK] Wykryto: %PYEXE%
 
-for /f "delims=" %%V in ('%PYEXE% -c "import sys;print('.'.join(map(str,sys.version_info[:3])))"') do set "PYVER=%%V"
-call :LOG "Python: %PYEXE% (wersja %PYVER%)"
-
-for /f "tokens=1-3 delims=." %%a in ("%PYVER%") do (
-  set "MAJ=%%a" & set "MIN=%%b"
-)
-if %MAJ% LSS 3 (
-  call :ERR "Wymagany Python >= 3.10 (wykryto %PYVER%)."
-  exit /b 1
-) else if %MAJ%==3 if %MIN% LSS 10 (
-  call :ERR "Wymagany Python >= 3.10 (wykryto %PYVER%)."
-  exit /b 1
-)
-
-rem --- 4) sprawdź wymagane moduły ---
-for /f "delims=" %%M in ('%PYEXE% -c "import importlib,sys;mods='%REQUIRED_MODS%'.split(',');missing=[m for m in mods if importlib.util.find_spec(m) is None];print(','.join(missing));sys.exit(1 if missing else 0)" ^& exit /b 0') do set "MISSING=%%M"
-if not "%MISSING%"=="" (
-  call :WARN "Brakujące moduły Pythona: %MISSING%"
-  call :HINT "Zainstaluj: %PYEXE% -m pip install %MISSING%"
-)
-
-rem --- 5) sprawdź Controlled Folder Access (jeśli PS dostępny) ---
-powershell -NoProfile -Command "Get-Command Get-MpPreference -ErrorAction SilentlyContinue" >nul 2>&1
-if not errorlevel 1 (
-  for /f "delims=" %%S in ('powershell -NoProfile -Command "(Get-MpPreference).EnableControlledFolderAccess"') do set "CFA=%%S"
-  if /I "%CFA%"=="1" (
-    call :WARN "Windows Controlled Folder Access jest WŁĄCZONY."
-    call :HINT "Może blokować zapis do niektórych folderów. Dodaj Pythona do Dozwolonych aplikacji lub wybierz inny folder wyjściowy."
-  )
-)
-
-rem --- 6) sprawdź builder i blokadę pliku docelowego ---
-if not exist "%BUILDER%" (
-  call :ERR "Nie znaleziono pliku buildera: %BUILDER%"
-  call :HINT "Upewnij się, że make_pricebot_pyz.py leży w katalogu projektu."
-  exit /b 1
-)
-
-if exist "%TARGET%" (
-  del /q "%TARGET%" >nul 2>&1
-  if exist "%TARGET%" (
-    call :WARN "Nie można usunąć istniejącego %TARGET% — plik może być otwarty / zablokowany."
-    call :HINT "Zamknij aplikacje, które mogą używać pliku (explorer podgląd, AV, zip viewer) albo zmień nazwę docelową."
-    call :HINT "Spróbuj też zbudować w innym katalogu."
-  )
-)
-
-rem --- 7) uruchom budowę ---
-call :LOG "Uruchamiam: %PYEXE% %BUILDER%"
-%PYEXE% "%BUILDER%" >> "%LOG%" 2>&1
+rem --- sprawdź PyInstaller ---
+%PYEXE% -m PyInstaller --version >nul 2>&1
 if errorlevel 1 (
-  call :ERR "Budowa NIE powiodła się. Szczegóły w %LOG%."
-  call :HINT "Sprawdź ostatnie błędy w logu: brak uprawnień, blokada AV, brak modułów, błąd składni w którymś .py."
+  echo [INFO] Instaluję PyInstaller...
+  %PYEXE% -m pip install pyinstaller >nul
+  if errorlevel 1 (
+    echo [ERR] Nie udało się zainstalować PyInstaller.
+    exit /b 1
+  )
+)
+echo [OK] PyInstaller gotowy.
+
+rem --- sprawdź inne zależności ---
+for %%M in (pandas requests beautifulsoup4 numpy openpyxl) do (
+  %PYEXE% -c "import %%M" >nul 2>&1
+  if errorlevel 1 (
+    echo [INFO] Brakuje %%M — instaluję...
+    %PYEXE% -m pip install %%M >nul
+  )
+)
+
+rem --- wykryj Controlled Folder Access (PowerShell) ---
+for /f "delims=" %%S in ('powershell -NoProfile -Command "(Get-MpPreference).EnableControlledFolderAccess" 2^>nul') do set "CFA=%%S"
+if /I "%CFA%"=="1" (
+  echo [WARN] Controlled Folder Access jest WŁĄCZONY.
+  echo [WARN] Może blokować zapis do folderu dist/. Dodaj Pythona do wyjątków w Defenderze.
+)
+
+rem --- usuń poprzednie buildy ---
+if exist build rmdir /s /q build
+if exist dist rmdir /s /q dist
+if exist "%APP_NAME%.spec" del "%APP_NAME%.spec" >nul
+
+rem --- budowa EXE ---
+echo [BUILD] Tworzę %APP_NAME%.exe ...
+%PYEXE% -m PyInstaller "%ENTRY_FILE%" ^
+    --onefile ^
+    --noconsole ^
+    --clean ^
+    --name "%APP_NAME%" ^
+    --log-level=WARN ^
+    --add-data "app_paths.py;." ^
+    --add-data "bazadanych.py;." ^
+    --add-data "linki_mieszkania.py;." ^
+    --add-data "scraper_otodom.py;." ^
+    --add-data "scraper_otodom_mieszkania.py;." ^
+    --add-data "CzyszczenieAdresu.py;." ^
+    --add-data "automat.py;." ^
+    --add-data "kolumny.py;." ^
+    --add-data "scalanie.py;." ^
+    --add-data "LOKAL_MIESZKALNY.py;." ^
+    --add-data "jeden_właściciel.py;." ^
+    --add-data "jeden_właściciel_i_LOKAL_MIESZKALNY.py;." ^
+    --add-data "cofnij.py;." ^
+    --add-data "pricebot_launcher.py;." ^
+    --add-data "bootstrap_files.py;." ^
+    >> "%LOG_FILE%" 2>&1
+
+if errorlevel 1 (
+  echo [ERR] Budowa NIE powiodła się — sprawdź build.log
   exit /b 1
 )
 
-if exist "%TARGET%" (
-  call :OK "Zbudowano %TARGET%"
-  call :HINT "Uruchom:  py %TARGET%   (Windows)  lub  python3 %TARGET% (Linux/macOS)"
-  exit /b 0
-) else (
-  call :ERR "Builder zakończył się bez błędu, ale nie znaleziono %TARGET%."
-  call :HINT "Sprawdź %LOG% — być może builder zapisał w innym miejscu."
+if not exist "dist\%APP_NAME%.exe" (
+  echo [ERR] Nie znaleziono pliku dist\%APP_NAME%.exe
   exit /b 1
 )
 
-rem ================== Funkcje ==================
-:LOG
-echo [INFO] %~1
->>"%LOG%" echo [INFO] %~1
-exit /b 0
-
-:WARN
-echo [WARN] %~1
->>"%LOG%" echo [WARN] %~1
-exit /b 0
-
-:ERR
-echo [ERR ] %~1
->>"%LOG%" echo [ERR ] %~1
-exit /b 0
-
-:OK
-echo [ OK ] %~1
->>"%LOG%" echo [ OK ] %~1
-exit /b 0
-
-:HINT
-echo   -> %~1
->>"%LOG%" echo   -> %~10
+echo.
+echo [OK] UDAŁO SIĘ 🎉
+echo [OK] Utworzono: dist\%APP_NAME%.exe
+echo [INFO] Uruchom: dist\%APP_NAME%.exe
+echo.
+pause
 exit /b 0
