@@ -20,14 +20,11 @@ import csv
 
 import pandas as pd
 
-# Główne kolumny z ogłoszeń
 HEADERS = [
-    "cena","cena_za_metr","metry","liczba_pokoi","pietro","rynek","rok_budowy","material",
-    "wojewodztwo","powiat","gmina","miejscowosc","dzielnica","ulica","link"
+    "cena", "cena_za_metr", "metry", "liczba_pokoi", "pietro", "rynek",
+    "rok_budowy", "material",
+    "wojewodztwo", "powiat", "gmina", "miejscowosc", "dzielnica", "ulica", "link"
 ]
-
-# Dodatkowa kolumna na błędy parsowania pojedynczych linii
-ERROR_COL = "blad_parsowania"
 
 INVALID_SHEET_CHARS = r'[\[\]\*\?\/\\:]'   # Excel sheet name invalid chars
 
@@ -42,33 +39,29 @@ def safe_sheet_name(name: str) -> str:
     return name[:31] if len(name) > 31 else name
 
 
-def _merge_decimal_fields(fields: list[str]) -> list[str]:
+def _fix_row_16_fields(row: list[str]) -> list[str] | None:
     """
-    Jeśli wiersz ma więcej pól niż HEADERS (15), próbujemy naprawić:
-    1) Założyć, że 'cena' została rozbita na 2 pola (indeks 0 i 1)
-    2) Jeśli nadal za dużo pól, próbujemy skleić 'metry' (indeks 2 i 3)
-    Jeśli po tych krokach wciąż liczba pól != 15, zwracamy listę tak jak jest
-    (wyżej oznaczymy to jako błąd).
+    Jeśli wiersz ma 16 pól, spróbuj zinterpretować to jako sytuację,
+    w której 'cena' została rozbita na dwa pola, np.:
+        ["123 900", "90 zł", "7 500 zł/m²", ...]  (16 elementów)
+    → łączymy pierwsze dwa pola:
+        ["123 900,90 zł", "7 500 zł/m²", ...]     (15 elementów)
     """
-    # 1) sklej potencjalnie rozbitą cenę
-    if len(fields) > len(HEADERS):
-        # logika: pierwsze pole wygląda jak część liczby, drugie jak 'grosze'
-        f0 = fields[0].strip().replace('"', '').replace(" ", "")
-        f1 = fields[1].strip().replace('"', '').replace(" ", "") if len(fields) > 1 else ""
-        if f0.replace("0", "1").isdigit() and f1.isdigit() and len(f1) <= 2:
-            fields[0] = fields[0] + "," + fields[1]
-            del fields[1]
+    if len(row) != len(HEADERS) + 1:
+        return None
 
-    # 2) sklej potencjalnie rozbite metry
-    if len(fields) > len(HEADERS) and len(fields) >= 4:
-        f2 = fields[2].strip().replace('"', '').replace(" ", "")
-        f3 = fields[3].strip().replace('"', '').replace(" ", "") if len(fields) > 3 else ""
-        if f2.replace("0", "1").isdigit() and f3.isdigit() and len(f3) <= 2:
-            fields[2] = fields[2] + "," + fields[3]
-            del fields[3]
+    c0 = row[0].strip()
+    c1 = row[1].strip()
 
-    # jeśli dalej jest za dużo pól – zostaw, wyżej oznaczymy jako błąd
-    return fields
+    # bardzo prosta heurystyka: pierwsze pole to liczba z ewentualnymi spacjami,
+    # drugie wygląda jak "xx zł" albo "xx"
+    if re.fullmatch(r"\d[\d ]*", c0) and re.fullmatch(r"\d{1,2}(?: ?zł)?", c1):
+        joined = f"{c0},{c1}"
+        fixed = [joined] + row[2:]
+        if len(fixed) == len(HEADERS):
+            return fixed
+
+    return None
 
 
 def read_csvs(in_dir: Path, pattern: str, encoding: str) -> list[pd.DataFrame]:
@@ -80,52 +73,41 @@ def read_csvs(in_dir: Path, pattern: str, encoding: str) -> list[pd.DataFrame]:
     dfs: list[pd.DataFrame] = []
 
     for f in files:
-        log(f"[READ] {f.name}")
-        rows: list[dict] = []
         try:
-            with f.open("r", encoding=encoding, newline="") as fh:
-                reader = csv.reader(fh, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+            log(f"[READ] {f.name}")
+            rows: list[list[str]] = []
 
-                for line_no, fields in enumerate(reader, start=1):
-                    if not fields:
+            with open(f, encoding=encoding, newline="") as fh:
+                reader = csv.reader(fh, delimiter=",", quotechar='"')
+                # pomiń nagłówek z pliku – używamy własnego HEADERS
+                try:
+                    next(reader)
+                except StopIteration:
+                    continue
+
+                for row in reader:
+                    # normalny wiersz
+                    if len(row) == len(HEADERS):
+                        rows.append(row)
                         continue
-
-                    # Pomijamy wiersz nagłówka (cena; cena_za_metr; ...)
-                    if line_no == 1 and fields[0].strip().lower() == "cena":
-                        continue
-
-                    # Wiersz typu "ERROR: ..." – zapisz w kolumnie błędu
-                    if len(fields) == 1 and fields[0].startswith("ERROR"):
-                        rows.append({
-                            **{h: "" for h in HEADERS},
-                            ERROR_COL: fields[0]
-                        })
-                        continue
-
-                    # Dopasuj liczbę pól
-                    fields = _merge_decimal_fields(fields)
-
-                    if len(fields) != len(HEADERS):
-                        # Nie udało się dopasować – wszystko wrzucamy w blad_parsowania
-                        raw = ";".join(fields)
-                        rows.append({
-                            **{h: "" for h in HEADERS},
-                            ERROR_COL: f"LINIA {line_no}: {raw}"
-                        })
-                        continue
-
-                    # OK – zwykły wiersz ogłoszenia
-                    row = dict(zip(HEADERS, fields))
-                    row[ERROR_COL] = ""
-                    rows.append(row)
+                    # przypadek z groszami w cenie (16 pól)
+                    if len(row) == len(HEADERS) + 1:
+                        fixed = _fix_row_16_fields(row)
+                        if fixed is not None:
+                            rows.append(fixed)
+                            continue
+                    # inne dziwne przypadki po prostu pomijamy
+                    # (możesz tu dodać logowanie jeśli chcesz)
+                    # log(f"[SKIP] {f.name}: nieoczekiwana liczba pól ({len(row)})")
+                    continue
 
             if not rows:
                 log(f"[WARN] Plik {f.name} nie zawiera poprawnych wierszy.")
                 continue
 
-            df = pd.DataFrame(rows, columns=HEADERS + [ERROR_COL])
+            df = pd.DataFrame(rows, columns=HEADERS)
 
-            # Uzupełnij puste województwo nazwą pliku (tak jak wcześniej)
+            # Podpowiedz województwo z nazwy pliku, jeśli puste
             woj = f.stem.lower().replace(".__tmp__", "")
             mask = df["wojewodztwo"].astype(str).str.strip().eq("")
             if mask.any():
@@ -143,7 +125,6 @@ def autosize_columns(ws) -> None:
     """Proste auto-dopasowanie szerokości kolumn (openpyxl Worksheet)."""
     from openpyxl.utils import get_column_letter
 
-    # Zbierz maksymalną długość tekstu dla każdej kolumny
     for i, col in enumerate(ws.iter_cols(1, ws.max_column), start=1):
         max_len = 0
         for cell in col:
@@ -157,15 +138,13 @@ def autosize_columns(ws) -> None:
                     max_len = l
             except Exception:
                 pass
-        # Minimalnie 8, maks 60, dodaj mały margines
         width = max(8, min(60, max_len + 2))
         ws.column_dimensions[get_column_letter(i)].width = width
 
 
 def write_excel(df: pd.DataFrame, out_xlsx: Path) -> None:
-    # Nazwa arkusza z godziną i datą w strefie Europe/Warsaw
     now = datetime.now(ZoneInfo("Europe/Warsaw"))
-    stamp = now.strftime("%H.%M %d.%m.%Y")    # UWAGA: kropka zamiast ":" (Excel nie lubi ":")
+    stamp = now.strftime("%H.%M %d.%m.%Y")    # kropka zamiast ":" (Excel nie lubi ":")
     sheet_name = safe_sheet_name(f"Polska ({stamp})")
 
     log(f"[WRITE] {out_xlsx.name}  arkusz='{sheet_name}'  wierszy={len(df)}")
@@ -174,13 +153,9 @@ def write_excel(df: pd.DataFrame, out_xlsx: Path) -> None:
     with pd.ExcelWriter(out_xlsx, engine="openpyxl", mode="w") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
 
-        # Formatowanie arkusza (autofilter, freeze, autosize)
         ws = writer.book[sheet_name]
-        # Freeze top row
         ws.freeze_panes = "A2"
-        # Autofilter na cały zakres danych
         ws.auto_filter.ref = ws.dimensions
-        # Szerokości kolumn
         autosize_columns(ws)
 
 
@@ -209,10 +184,9 @@ def main():
         log("[ERR] Nie znaleziono żadnych danych do scalenia.")
         sys.exit(1)
 
-    # Konkatenacja
     df = pd.concat(dfs, ignore_index=True)
 
-    # Dedup po linku (zachowaj pierwsze wystąpienie)
+    # Dedup po linku
     if "link" in df.columns:
         before = len(df)
         df = df.drop_duplicates(subset=["link"], keep="first")
@@ -229,14 +203,11 @@ def main():
             ignore_index=True
         )
 
-    # Upewnij się, że mamy komplet kolumn: HEADERS + ERROR_COL
+    # Upewnij się, że kolejność kolumn jest zgodna z HEADERS
     for col in HEADERS:
         if col not in df.columns:
             df[col] = ""
-    if ERROR_COL not in df.columns:
-        df[ERROR_COL] = ""
-
-    df = df[HEADERS + [ERROR_COL]]
+    df = df[HEADERS]
 
     write_excel(df, out_xlsx)
     log("[DONE] Zapisano plik.")
