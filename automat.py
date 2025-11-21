@@ -1,190 +1,281 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from pathlib import Path
-import pandas as pd
-import numpy as np
-import sys
-import time
+"""
+automat.py
 
-# ---------- HELPERY ----------
+Uruchamiany z GUI PriceBota przyciskiem "Automat".
+
+Użycie:
+    python automat.py <plik_raportu.xlsx> <folder_bazy>
+
+    <plik_raportu.xlsx>  – ścieżka do raportu z kolumnami:
+        "Nr KW", "Obszar"/"metry"/"powierzchnia", itd.
+    <folder_bazy>        – folder, w którym leży "Polska.xlsx"
+
+Skrypt:
+  * dla każdego wiersza raportu
+  * znajduje dopasowane ogłoszenia w Polska.xlsx (±m², lokalizacja)
+  * liczy średnią cenę za m², średnią po obniżce (domyślnie 15%)
+    i statystyczną wartość (metry * średnia po obniżce)
+  * wpisuje te trzy wartości do odpowiednich kolumn raportu
+  * ZAPISUJE zmodyfikowany raport **w to samo miejsce**.
+"""
+
+from __future__ import annotations
+from pathlib import Path
+import sys
+import unicodedata
+
+import numpy as np
+import pandas as pd
+
+
+# --- pomocnicze z selektor_csv ----------------------------------------------
 
 def _norm(s: str) -> str:
     return (s or "").strip().lower().replace(" ", "").replace("\xa0", "").replace("\t", "")
 
-def _trim(val):
-    if pd.isna(val): return ""
+def _find_col(cols, candidates):
+    norm_map = { _norm(c): c for c in cols }
+    # dokładne
+    for cand in candidates:
+        key = _norm(cand)
+        if key in norm_map:
+            return norm_map[key]
+    # "zawiera"
+    for c in cols:
+        if any(_norm(x) in _norm(c) for x in candidates):
+            return c
+    return None
+
+def _trim_after_semicolon(val):
+    if pd.isna(val):
+        return ""
     s = str(val)
-    if ";" in s: s = s.split(";", 1)[0].strip()
+    if ";" in s:
+        s = s.split(";", 1)[0].strip()
     return s
 
-def _float(x):
-    if pd.isna(x): return None
+def _to_float_maybe(x):
+    """Parsuje liczby typu '101,62 m²', '52 m2', '11 999 zł/m²' itd."""
+    if pd.isna(x):
+        return None
     s = str(x)
-    for u in ["m²", "m2", "zł/m²", "zł/m2", "zł"]:
-        s = s.replace(u, "")
-    s = s.replace(" ", "").replace(",", ".").replace("\xa0","")
+    for unit in ["m²", "m2", "zł/m²", "zł/m2", "zł"]:
+        s = s.replace(unit, "")
+    s = s.replace(" ", "").replace("\xa0", "").replace(",", ".")
     s = "".join(ch for ch in s if (ch.isdigit() or ch == "." or ch == "-"))
     try:
         return float(s) if s else None
-    except:
+    except Exception:
         return None
 
-def _find(cols, names):
-    norm = { _norm(c): c for c in cols }
-    for n in names:
-        k=_norm(n)
-        if k in norm: return norm[k]
-    for c in cols:
-        if any(_norm(n) in _norm(c) for n in names): return c
-    return None
 
-# ---------- ALGORYTM AUTOMAT ----------
+VALUE_COLS = [
+    "Średnia cena za m2 ( z bazy)",
+    "Średnia skorygowana cena za m2",
+    "Statystyczna wartość nieruchomości",
+]
 
-def run_automat(xlsx_path: Path, base_dir: Path, margin_pct: float, margin_m2: float):
-    """Wczytuje raport i automatycznie przelicza WSZYSTKIE wiersze.
-       Nie tworzy plików (Nr KW).xlsx.
-       Tylko wpisuje wartości do raportu.
-    """
 
-    # ---- Wczytaj raport ----
-    if xlsx_path.suffix.lower() in (".xlsx", ".xls"):
-        df = pd.read_excel(xlsx_path)
+def main(argv: list[str]) -> int:
+    if len(argv) < 3:
+        print("Użycie: python automat.py <plik_raportu.xlsx> <folder_bazy>", file=sys.stderr)
+        return 2
+
+    raport_path = Path(argv[1]).expanduser().resolve()
+    base_dir    = Path(argv[2]).expanduser().resolve()
+    polska_path = base_dir / "Polska.xlsx"
+
+    if not raport_path.exists():
+        print(f"[ERROR] Plik raportu nie istnieje: {raport_path}", file=sys.stderr)
+        return 2
+    if not polska_path.exists():
+        print(f"[ERROR] Nie znaleziono bazy Polska.xlsx w folderze: {base_dir}", file=sys.stderr)
+        return 2
+
+    print(f"[INFO] Raport : {raport_path}")
+    print(f"[INFO] Baza   : {polska_path}")
+
+    # --- wczytaj raport ---
+    if raport_path.suffix.lower() in (".xlsx", ".xls"):
+        df_r = pd.read_excel(raport_path)
     else:
-        df = pd.read_csv(xlsx_path, sep=None, engine="python")
+        df_r = pd.read_csv(raport_path, sep=None, engine="python")
 
-    # ---- Wczytaj Polska.xlsx ----
-    pl_path = base_dir / "Polska.xlsx"
-    if not pl_path.exists():
-        raise FileNotFoundError(f"Brak {pl_path}")
+    # --- wczytaj Polska.xlsx ---
+    df_pl = pd.read_excel(polska_path)
 
-    df_pl = pd.read_excel(pl_path)
+    # kolumny w Polska.xlsx
+    col_area_pl = _find_col(df_pl.columns, ["metry", "powierzchnia", "m2", "obszar"])
+    col_price_pl = _find_col(
+        df_pl.columns,
+        ["cena_za_metr", "cena za metr", "cena za m²", "cena za m2", "cena/m2"]
+    )
+    if col_area_pl is None or col_price_pl is None:
+        print("[ERROR] Brak kolumn metrażu i/lub ceny za m² w Polska.xlsx", file=sys.stderr)
+        return 2
 
-    # znajdź kolumny w Polsce
-    col_area_pl  = _find(df_pl.columns, ["metry","powierzchnia","m2","obszar"])
-    col_price_pl = _find(df_pl.columns, ["cena_za_metr","cena za metr","cena za m2","cena/m2"])
-    if not col_area_pl or not col_price_pl:
-        raise ValueError("Brak kolumn metrażu lub ceny w Polska.xlsx")
+    # mapy kolumn w raporcie
+    cols_r = list(df_r.columns)
 
-    # ---- kolumny wynikowe (utwórz jeśli brak) ----
-    C1="Średnia cena za m2 ( z bazy)"
-    C2="Średnia skorygowana cena za m2"
-    C3="Statystyczna wartość nieruchomości"
-    for c in (C1,C2,C3):
-        if c not in df.columns: df[c] = ""
+    kw_col = _find_col(cols_r,
+        ["Nr KW", "nr_kw", "nrksiegi", "nr księgi", "nr_ksiegi", "numer księgi"]
+    )
+    area_col = _find_col(cols_r, ["Obszar", "metry", "powierzchnia"])
 
-    # ---- Iteracja po wierszach raportu ----
-    for i in range(len(df)):
-        row = df.iloc[i]
+    woj_col = _find_col(cols_r, ["Województwo", "wojewodztwo", "woj"])
+    pow_col = _find_col(cols_r, ["Powiat"])
+    gmi_col = _find_col(cols_r, ["Gmina"])
+    mia_col = _find_col(cols_r, ["Miejscowość", "Miejscowosc", "Miasto"])
+    dzl_col = _find_col(cols_r, ["Dzielnica", "Osiedle"])
+    uli_col = _find_col(cols_r, ["Ulica", "Ulica(dla budynku)", "Ulica(dla lokalu)"])
 
-        # Metraż
-        col_area = _find(df.columns, ["Obszar","metry","powierzchnia"])
-        val_area = _float(_trim(row[col_area])) if col_area else None
-        if val_area is None:  # brak metrażu => puste wartości
-            df.at[i,C1]="" ; df.at[i,C2]="" ; df.at[i,C3]=""
+    # kolumny wynikowe
+    col_avg = _find_col(cols_r,
+        ["Średnia cena za m2 ( z bazy)", "Srednia cena za m2 ( z bazy)",
+         "Średnia cena za m² (z bazy)"]
+    )
+    col_avg_corr = _find_col(cols_r,
+        ["Średnia skorygowana cena za m2", "Srednia skorygowana cena za m2"]
+    )
+    col_stat = _find_col(cols_r,
+        ["Statystyczna wartość nieruchomości", "Statystyczna wartosc nieruchomosci"]
+    )
+
+    if col_avg is None:
+        col_avg = VALUE_COLS[0];  df_r[col_avg] = ""
+    if col_avg_corr is None:
+        col_avg_corr = VALUE_COLS[1];  df_r[col_avg_corr] = ""
+    if col_stat is None:
+        col_stat = VALUE_COLS[2];  df_r[col_stat] = ""
+
+    # parametry (na razie stałe – jak w GUI domyślnie)
+    margin_m2  = 15.0
+    margin_pct = 15.0
+
+    # ---- pomoc: maski lokalizacji w Polska.xlsx ----
+    def _eq_mask(col_candidates, value):
+        col = _find_col(df_pl.columns, col_candidates)
+        if col is None or not str(value).strip():
+            return pd.Series(True, index=df_pl.index)
+        s = df_pl[col].astype(str).str.strip().str.lower()
+        v = str(value).strip().lower()
+        return s == v
+
+    # --- pętla po wierszach raportu ---
+    for i in range(len(df_r)):
+        row = df_r.iloc[i]
+
+        area_val = _to_float_maybe(_trim_after_semicolon(row[area_col])) if area_col else None
+        if area_val is None:
+            # brak metrażu – pomijamy wiersz
             continue
 
-        # lokalizacja
-        def get(cands):
-            c=_find(df.columns,cands)
-            return _trim(row[c]) if c else ""
+        woj_r = _trim_after_semicolon(row[woj_col]) if woj_col else ""
+        pow_r = _trim_after_semicolon(row[pow_col]) if pow_col else ""
+        gmi_r = _trim_after_semicolon(row[gmi_col]) if gmi_col else ""
+        mia_r = _trim_after_semicolon(row[mia_col]) if mia_col else ""
+        dzl_r = _trim_after_semicolon(row[dzl_col]) if dzl_col else ""
+        uli_r = _trim_after_semicolon(row[uli_col]) if uli_col else ""
 
-        woj_r=get(["Województwo","woj"])
-        pow_r=get(["Powiat"])
-        gmi_r=get(["Gmina"])
-        mia_r=get(["Miejscowość","Miasto"])
-        dzl_r=get(["Dzielnica","Osiedle"])
-        uli_r=get(["Ulica","Ulica(dla budynku)","Ulica(dla lokalu)"])
-
-        # ---- filtr metrażu (tylko ± m2) ----
+        # --- filtr metrażu ---
         delta = abs(margin_m2)
-        lo,hi = max(0,val_area-delta), val_area+delta
-        A = df_pl[col_area_pl].map(_float)
-        mask = (A>=lo)&(A<=hi)
+        low, high = max(0.0, area_val - delta), area_val + delta
+        m = df_pl[col_area_pl].map(_to_float_maybe)
+        mask_area = (m >= low) & (m <= high)
 
-        def eq(col_names,val):
-            c=_find(df_pl.columns,col_names)
-            if not c or not str(val).strip(): return pd.Series(True,index=df_pl.index)
-            s=df_pl[c].astype(str).str.strip().str.lower()
-            return s==str(val).strip().lower()
+        # pełny filtr
+        mask_full = mask_area.copy()
+        mask_full &= _eq_mask(["wojewodztwo", "województwo"], woj_r)
+        mask_full &= _eq_mask(["powiat"], pow_r)
+        mask_full &= _eq_mask(["gmina"], gmi_r)
+        mask_full &= _eq_mask(["miejscowosc", "miasto", "miejscowość"], mia_r)
+        if dzl_r:
+            mask_full &= _eq_mask(["dzielnica", "osiedle"], dzl_r)
+        if uli_r:
+            mask_full &= _eq_mask(["ulica"], uli_r)
 
-        # pełne dopasowanie
-        mask &= eq(["wojewodztwo","województwo"],woj_r)
-        mask &= eq(["powiat"],pow_r)
-        mask &= eq(["gmina"],gmi_r)
-        mask &= eq(["miejscowosc","miasto","miejscowość"],mia_r)
-        if dzl_r: mask &= eq(["dzielnica","osiedle"],dzl_r)
-        if uli_r: mask &= eq(["ulica"],uli_r)
-        sel=df_pl[mask].copy()
+        df_sel = df_pl[mask_full].copy()
 
-        # fallback ulica→dzielnica→miasto, dzielnica→miasto, samo miasto
-        if sel.empty and uli_r:
-            m= (A>=lo)&(A<=hi)
-            m &= eq(["wojewodztwo","województwo"],woj_r)
-            m &= eq(["miejscowosc","miasto","miejscowość"],mia_r)
-            if dzl_r: m &= eq(["dzielnica","osiedle"],dzl_r)
-            m &= eq(["ulica"],uli_r)
-            sel=df_pl[m].copy()
-        if sel.empty and dzl_r:
-            m=(A>=lo)&(A<=hi)
-            m &= eq(["wojewodztwo","województwo"],woj_r)
-            m &= eq(["miejscowosc","miasto","miejscowość"],mia_r)
-            m &= eq(["dzielnica","osiedle"],dzl_r)
-            sel=df_pl[m].copy()
-        if sel.empty and mia_r:
-            m=(A>=lo)&(A<=hi)
-            m &= eq(["wojewodztwo","województwo"],woj_r)
-            m &= eq(["miejscowosc","miasto","miejscowość"],mia_r)
-            sel=df_pl[m].copy()
+        # fallback 1: ulica + dzielnica + miasto
+        if df_sel.empty and uli_r:
+            mask_ul = mask_area.copy()
+            mask_ul &= _eq_mask(["wojewodztwo", "województwo"], woj_r)
+            mask_ul &= _eq_mask(["miejscowosc", "miasto", "miejscowość"], mia_r)
+            if dzl_r:
+                mask_ul &= _eq_mask(["dzielnica", "osiedle"], dzl_r)
+            mask_ul &= _eq_mask(["ulica"], uli_r)
+            df_sel = df_pl[mask_ul].copy()
 
-        if sel.empty:
-            df.at[i,C1]="" ; df.at[i,C2]="" ; df.at[i,C3]=""
+        # fallback 2: dzielnica + miasto
+        if df_sel.empty and dzl_r:
+            mask_dziel = mask_area.copy()
+            mask_dziel &= _eq_mask(["wojewodztwo", "województwo"], woj_r)
+            mask_dziel &= _eq_mask(["miejscowosc", "miasto", "miejscowość"], mia_r)
+            mask_dziel &= _eq_mask(["dzielnica", "osiedle"], dzl_r)
+            df_sel = df_pl[mask_dziel].copy()
+
+        # fallback 3: samo miasto
+        if df_sel.empty and mia_r:
+            mask_miasto = mask_area.copy()
+            mask_miasto &= _eq_mask(["wojewodztwo", "województwo"], woj_r)
+            mask_miasto &= _eq_mask(["miejscowosc", "miasto", "miejscowość"], mia_r)
+            df_sel = df_pl[mask_miasto].copy()
+
+        if df_sel.empty:
+            # brak dopasowań – zostawiamy puste pola
             continue
 
-        # IQR remove
-        P = sel[col_price_pl].map(_float)
-        sel = sel[P.notna()].copy()
-        P = sel[col_price_pl].map(_float)
-        if len(P)>=4:
-            q1=np.nanpercentile(P,25)
-            q3=np.nanpercentile(P,75)
-            lo2=q1-1.5*(q3-q1)
-            hi2=q3+1.5*(q3-q1)
-            sel=sel[(P>=lo2)&(P<=hi2)]
-            P=sel[col_price_pl].map(_float)
+        prices = df_sel[col_price_pl].map(_to_float_maybe)
+        df_sel = df_sel[prices.notna()].copy()
+        prices = df_sel[col_price_pl].map(_to_float_maybe)
 
-        # ---- średnia + skorygowana + wartość ----
-        avg=float(np.nanmean(P)) if len(P)>0 else None
-        if avg is not None and margin_pct>0:
-            corr= avg*(1-margin_pct/100)
+        if len(prices) >= 4:
+            q1 = np.nanpercentile(prices, 25)
+            q3 = np.nanpercentile(prices, 75)
+            iqr = q3 - q1
+            lo = q1 - 1.5 * iqr
+            hi = q3 + 1.5 * iqr
+            df_sel = df_sel[(prices >= lo) & (prices <= hi)].copy()
+            prices = df_sel[col_price_pl].map(_to_float_maybe)
+
+        if df_sel.empty:
+            continue
+
+        avg = float(np.nanmean(prices)) if not df_sel.empty else None
+
+        if avg is not None and margin_pct > 0:
+            corrected = avg * (1 - margin_pct / 100.0)
         else:
-            corr=avg
-        val = (val_area*corr) if (val_area and corr) else ""
+            corrected = avg
 
-        df.at[i,C1]= avg if avg else ""
-        df.at[i,C2]= corr if corr else ""
-        df.at[i,C3]= val if val else ""
+        stat_val = (area_val * corrected) if (area_val is not None and corrected is not None) else ""
 
-    # ---- zapisz raport ----
-    if xlsx_path.suffix.lower() in (".xlsx",".xls"):
-        df.to_excel(xlsx_path, index=False)
-    else:
-        df.to_csv(xlsx_path, index=False, encoding="utf-8-sig")
+        df_r.at[i, col_avg]       = avg if avg is not None else ""
+        df_r.at[i, col_avg_corr]  = corrected if corrected is not None else ""
+        df_r.at[i, col_stat]      = stat_val
+
+    # --- zapis raportu w to samo miejsce ---
+    try:
+        if raport_path.suffix.lower() in (".xlsx", ".xls"):
+            df_r.to_excel(raport_path, index=False)
+        else:
+            df_r.to_csv(raport_path, index=False, encoding="utf-8-sig")
+    except PermissionError:
+        print(
+            f"[ERROR] Nie udało się zapisać raportu (plik może być otwarty w Excelu):\n{raport_path}",
+            file=sys.stderr
+        )
+        return 1
+    except Exception as e:
+        print(f"[ERROR] Błąd zapisu raportu:\n{raport_path}\n{e}", file=sys.stderr)
+        return 1
+
+    print("[OK] Zapisano zmodyfikowany raport.")
+    return 0
 
 
-# ---------- START ----------
-
-if __name__=="__main__":
-    # args: path_to_report, base_folder, margin_pct, margin_m2
-    if len(sys.argv)<5:
-        print("Użycie: Automat <plik_raportu> <folder_baza> <obnizka_%> <+-m2>")
-        sys.exit(1)
-
-    raport=Path(sys.argv[1])
-    folder=Path(sys.argv[2])
-    pct=float(sys.argv[3])
-    m2=float(sys.argv[4])
-
-    t=time.time()
-    run_automat(raport, folder, pct, m2)
-    print(f"[OK] Zakończono w {time.time()-t:.2f}s")
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
