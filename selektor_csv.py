@@ -124,7 +124,16 @@ class App(tk.Tk):
         row_in.pack(fill="x", padx=8, pady=6)
         ttk.Entry(row_in, textvariable=self.input_file_var).pack(side="left", fill="x", expand=True)
         ttk.Button(row_in, text="Wybierz...", command=self.choose_input_file).pack(side="left", padx=(8, 0))
-        ttk.Button(row_in, text="Czyszczenie Pliku", command=self.clean_input_file).pack(side="left", padx=(8, 0))
+
+        # przycisk Czyszczenie Pliku z kolorami SZARY → ŻÓŁTY → ZIELONY
+        self.clean_btn = tk.Button(
+            row_in,
+            text="Czyszczenie Pliku",
+            command=self.clean_input_file,
+            bg="#d9d9d9",
+            activebackground="#d0d0d0"
+        )
+        self.clean_btn.pack(side="left", padx=(8, 0))
 
         # ---------- Folder bazowy ----------
         group_base = ttk.LabelFrame(root, text="Miejsce tworzenia plików i folderów")
@@ -176,14 +185,12 @@ class App(tk.Tk):
 
         ttk.Label(row_ctrl1, text="Pomiary brzegowe metrażu:").pack(side="left")
 
-        # <-- ZAMIENIONE KOLEJNOŚCIĄ -->
         ttk.Label(row_ctrl1, text="± m²:").pack(side="left", padx=(8, 2))
         ttk.Spinbox(row_ctrl1, from_=0.0, to=200.0, increment=0.5,
                     width=6, textvariable=self.margin_m2_var).pack(side="left")
         ttk.Label(row_ctrl1, text="obniżka % ceny:").pack(side="left", padx=(12, 2))
         ttk.Spinbox(row_ctrl1, from_=0.0, to=100.0, increment=0.5,
                     width=6, textvariable=self.margin_pct_var).pack(side="left")
-        # -------------------------------
 
         ttk.Button(row_ctrl1, text="‹ Poprzedni", command=self.prev_row).pack(side="left", padx=(16, 0))
         ttk.Button(row_ctrl1, text="Następny ›", command=self.next_row).pack(side="left", padx=(6, 0))
@@ -257,9 +264,85 @@ class App(tk.Tk):
             self.preview_label.config(text="{Błąd odczytu pliku}")
 
     def clean_input_file(self):
-        """Uruchamia skrypt CzyszczenieAdresu.py, przekazując ścieżkę do aktualnie wybranego pliku (jeśli jest)."""
-        extra = [self.input_file_var.get()] if self.input_file_var.get() else []
-        self._run_script(["CzyszczenieAdresu.py", "czyszczeniadresu.py"], extra_args=extra)
+        """Uruchamia skrypt CzyszczenieAdresu.py w tle, z kolorami przycisku:
+        SZARY (spoczynek) → ŻÓŁTY (pracuje) → ZIELONY (zakończono).
+        """
+        raport = self.input_file_var.get().strip()
+        if not raport:
+            messagebox.showerror("Czyszczenie adresu", "Najpierw wybierz plik raportu (u góry).")
+            return
+
+        # ŻÓŁTY = pracuje
+        try:
+            self.clean_btn.config(bg="#f7e26b", activebackground="#f5d742")
+        except Exception:
+            pass
+
+        def worker():
+            here = Path(__file__).resolve().parent
+            script_path = None
+            for name in ["CzyszczenieAdresu.py", "czyszczeniadresu.py"]:
+                cand = here / name
+                if cand.exists():
+                    script_path = cand
+                    break
+
+            if script_path is None:
+                def no_script():
+                    try:
+                        self.clean_btn.config(bg="#d9d9d9", activebackground="#d0d0d0")
+                    except Exception:
+                        pass
+                    messagebox.showerror("Czyszczenie adresu",
+                                         "Nie znaleziono pliku CzyszczenieAdresu.py w folderze aplikacji.")
+                self.after(0, no_script)
+                return
+
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, str(script_path), raport],
+                    cwd=str(here),
+                    close_fds=(os.name != "nt"),
+                    creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                )
+                proc.wait()
+                rc = proc.returncode
+            except Exception as e:
+                def on_error():
+                    try:
+                        self.clean_btn.config(bg="#d9d9d9", activebackground="#d0d0d0")
+                    except Exception:
+                        pass
+                    messagebox.showerror("Czyszczenie adresu",
+                                         f"Błąd uruchamiania CzyszczenieAdresu.py:\n{e}")
+                self.after(0, on_error)
+                return
+
+            def on_done():
+                if rc == 0:
+                    # ZIELONY = OK
+                    try:
+                        self.clean_btn.config(bg="#8ef98e", activebackground="#76e476")
+                    except Exception:
+                        pass
+                    messagebox.showinfo(
+                        "Czyszczenie adresu",
+                        "Zakończono działanie CzyszczenieAdresu.py.\n"
+                        "Jeśli skrypt modyfikował raport, zmiany powinny być widoczne w pliku wejściowym."
+                    )
+                else:
+                    try:
+                        self.clean_btn.config(bg="#d9d9d9", activebackground="#d0d0d0")
+                    except Exception:
+                        pass
+                    messagebox.showerror(
+                        "Czyszczenie adresu",
+                        f"Skrypt CzyszczenieAdresu.py zakończył się kodem wyjścia {rc}."
+                    )
+
+            self.after(0, on_done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def choose_base_folder(self):
         d = filedialog.askdirectory(title="Wybierz folder bazowy",
@@ -365,7 +448,6 @@ class App(tk.Tk):
             return
         open_ui(root_dir, parent=self)
 
-    # --------- NOWA WERSJA AUTOMATE (z argumentami do automat.py) ----------
     def automate(self):
         """Uruchamia automat.py w tle, z raportem i folderem bazy jako argumenty."""
 
@@ -451,7 +533,7 @@ class App(tk.Tk):
             self.after(0, on_done)
 
         threading.Thread(target=worker, daemon=True).start()
-    # ----------------------------------------------------------------------
+    # -------------------------
 
     def apply_filter(self):
         """Uruchom wybrany filtr na pliku wejściowym."""
