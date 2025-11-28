@@ -8,6 +8,9 @@ Uzupełnia luki w kolumnach adresowych raportu PriceBota
 na podstawie:
 - TERYT (teryt.csv)
 - obszar_sadow.xlsx (zakresy sądów, też z kolumnami adresowymi)
+- specjalnych reguł dla:
+  * miast wojewódzkich
+  * dawnych gmin Warszawy (1999–2002), np. 'Warszawa-Ursus'
 
 Zakładamy, że BRAKI w adresie są oznaczone jako:
     ---    (trzy myślniki)
@@ -118,6 +121,77 @@ CAPITAL_MAP = {
     _place_base("Wrocław"): ("Dolnośląskie", "Wrocław", "Wrocław", "Wrocław"),
     _place_base("Zielona Góra"): ("Lubuskie", "Zielona Góra", "Zielona Góra", "Zielona Góra"),
 }
+
+
+# ---------- SPECJALNE: dawne gminy Warszawy (1999–2002) ----------
+
+# mapujemy bazową nazwę dzielnicy na wersję „ładną”
+WARSZAWA_DISTRICTS = {
+    "bemowo": "Bemowo",
+    "bialoleka": "Białołęka",
+    "bielany": "Bielany",
+    "mokotow": "Mokotów",
+    "ochota": "Ochota",
+    "praga poludnie": "Praga-Południe",
+    "praga polnoc": "Praga-Północ",
+    "rembertow": "Rembertów",
+    "srodmiescie": "Śródmieście",
+    "targowek": "Targówek",
+    "ursus": "Ursus",
+    "ursynow": "Ursynów",
+    "wawer": "Wawer",
+    "wesola": "Wesoła",
+    "wilanow": "Wilanów",
+    "wlochy": "Włochy",
+    "wola": "Wola",
+    "zoliborz": "Żoliborz",
+}
+
+def _detect_warsaw_district_from_gmina(gmi_raw: str) -> str | None:
+    """
+    Jeśli gmina wygląda na historyczną gminę Warszawy (np. 'Warszawa-Ursus'),
+    zwraca nazwę dzielnicy w wersji ładnej, np. 'Ursus'.
+    W przeciwnym razie zwraca None.
+    """
+    if not gmi_raw:
+        return None
+    g = _norm(gmi_raw)
+    if "warszawa" not in g:
+        return None
+
+    # usuń słowa typu 'gmina', 'm.st.' itd.
+    for tok in ["gmina", "m.st.", "m. st.", "m st", "miasto"]:
+        g = g.replace(tok, "")
+    g = g.strip()
+
+    # spróbuj wydzielić część po 'warszawa'
+    part = ""
+    if "warszawa-" in g:
+        part = g.split("warszawa-", 1)[1]
+    elif "warszawa " in g:
+        part = g.split("warszawa", 1)[1].strip()
+    else:
+        # np. samo 'Warszawa' – to nie jest dawna gmina z sufiksem
+        return None
+
+    part = part.strip("- ").strip()
+    if not part:
+        return None
+
+    base = _place_base(part)
+    if not base:
+        return None
+
+    # spróbuj dosłownie, potem bez myślników
+    if base in WARSZAWA_DISTRICTS:
+        return WARSZAWA_DISTRICTS[base]
+
+    base2 = base.replace("-", " ")
+    if base2 in WARSZAWA_DISTRICTS:
+        return WARSZAWA_DISTRICTS[base2]
+
+    # fallback: użyj jak jest, tylko kapitalizacja pierwszej litery (resztę dopali upper na końcu)
+    return base.title()
 
 
 # ---------- Wczytanie i przygotowanie TERYT ----------
@@ -288,20 +362,37 @@ def _fill_from_source(
     return r
 
 
-# ---------- Uzupełnianie jednego wiersza – TERYT + obszar_sadow ----------
+# ---------- Uzupełnianie jednego wiersza – specjalne reguły + TERYT + obszar_sadow ----------
 
 def _enrich_row(row: pd.Series, teryt: pd.DataFrame, sad: pd.DataFrame) -> pd.Series:
     """
     Uzupełnia dziury adresowe w jednym wierszu na podstawie:
-    1) miast wojewódzkich (Warszawa → Mazowieckie/Warszawa/Warszawa/Warszawa)
-    2) TERYT
-    3) obszar_sadow.xlsx (jako dodatkowe źródło)
+    1) specjalnych reguł Warszawy (dawne gminy 1999–2002)
+    2) miast wojewódzkich (Warszawa → Mazowieckie/Warszawa/...)
+    3) TERYT
+    4) obszar_sadow.xlsx (jako dodatkowe źródło)
 
     Brak = puste albo '---'.
     """
     r = row.copy()
 
-    # --- 1) Najpierw specjalna obsługa miast wojewódzkich ---
+    # --- 1) Specjalne: dawne gminy Warszawy (np. 'Warszawa-Ursus') ---
+    gmi_raw_initial = r.get("Gmina", "")
+    dz_wawa = _detect_warsaw_district_from_gmina(gmi_raw_initial)
+    if dz_wawa:
+        # Ustaw Mazowieckie / Warszawa / Warszawa / Warszawa / <dzielnica>
+        if _is_missing(r.get("Województwo", "")):
+            r["Województwo"] = "Mazowieckie"
+        if _is_missing(r.get("Powiat", "")):
+            r["Powiat"] = "Warszawa"
+        # Gmina zawsze 'Warszawa'
+        r["Gmina"] = "Warszawa"
+        if _is_missing(r.get("Miejscowość", "")):
+            r["Miejscowość"] = "Warszawa"
+        if _is_missing(r.get("Dzielnica", "")):
+            r["Dzielnica"] = dz_wawa
+
+    # --- 2) Miasta wojewódzkie (po ewentualnej korekcie gminy Warszawy) ---
     mj_raw_initial = r.get("Miejscowość", "")
     capital_key = _place_base(mj_raw_initial)
     if capital_key in CAPITAL_MAP:
@@ -315,7 +406,7 @@ def _enrich_row(row: pd.Series, teryt: pd.DataFrame, sad: pd.DataFrame) -> pd.Se
         if _is_missing(r.get("Miejscowość", "")):
             r["Miejscowość"] = mj_cap
 
-    # --- 2) Normalizacja po ewentualnym uzupełnieniu stolicą ---
+    # --- 3) Normalizacja po powyższych krokach ---
     woj_raw = r.get("Województwo", "")
     pow_raw = r.get("Powiat", "")
     gmi_raw = r.get("Gmina", "")
@@ -328,10 +419,10 @@ def _enrich_row(row: pd.Series, teryt: pd.DataFrame, sad: pd.DataFrame) -> pd.Se
     mj_n  = _norm(mj_raw)  if not _is_missing(mj_raw)  else ""
     dz_n  = _norm(dz_raw)  if not _is_missing(dz_raw)  else ""
 
-    # --- 3) TERYT ---
+    # --- 4) TERYT ---
     r = _fill_from_source(r, teryt, woj_n, pow_n, gmi_n, mj_n, dz_n)
 
-    # --- 4) obszar_sadow, jeśli dalej są braki ---
+    # --- 5) obszar_sadow, jeśli dalej są braki ---
     if not sad.empty and any(_is_missing(r.get(col, "")) for col in ADDR_COLS):
         r = _fill_from_source(r, sad, woj_n, pow_n, gmi_n, mj_n, dz_n)
 
@@ -365,7 +456,7 @@ def clean_report(path: Path, teryt_path: str = "teryt.csv", sad_path: str = "obs
     # statystyka przed (brak = puste lub '---')
     missing_before = (df[ADDR_COLS].applymap(_is_missing)).sum()
 
-    # uzupełnianie (miasta wojewódzkie + TERYT + obszar_sadow)
+    # uzupełnianie (Warszawa-gminy + miasta wojewódzkie + TERYT + obszar_sadow)
     df2 = df.apply(_enrich_row, axis=1, teryt=teryt, sad=sad)
 
     # --- jeśli po uzupełnianiu nadal są braki w KLUCZOWYCH częściach adresu
@@ -404,7 +495,7 @@ def clean_report(path: Path, teryt_path: str = "teryt.csv", sad_path: str = "obs
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Uzupełnianie braków adresowych w raporcie na podstawie TERYT + obszar_sadow.xlsx + miast wojewódzkich."
+        description="Uzupełnianie braków adresowych w raporcie na podstawie TERYT + obszar_sadow.xlsx + miast wojewódzkich + dawnych gmin Warszawy."
     )
     parser.add_argument(
         "raport",
