@@ -328,16 +328,20 @@ def clean_report(path: Path, teryt_path: str = "teryt.csv", sad_path: str = "obs
     # uzupełnianie (TERYT + obszar_sadow)
     df2 = df.apply(_enrich_row, axis=1, teryt=teryt, sad=sad)
 
-    # --- NOWOŚĆ: jeśli po uzupełnianiu nadal są braki w adresie,
-    #             to w kolumnach VALUE_COLS wpisujemy komunikat
-    #             "Proszę dopisz manualnie".
-    # najpierw upewniamy się, że kolumny wartości istnieją
+    # --- jeśli po uzupełnianiu nadal są braki w KLUCZOWYCH częściach adresu
+    #     (Województwo, Powiat, Gmina, Miejscowość),
+    #     to w kolumnach VALUE_COLS wpisujemy komunikat
+    #     "Proszę dopisz manualnie".
+    #     Dzielnica jest traktowana jako opcjonalna.
+
+    # upewnij się, że kolumny wartości istnieją
     for vcol in VALUE_COLS:
         if vcol not in df2.columns:
             df2[vcol] = ""
 
-    # wiersze, gdzie nadal brakuje czegokolwiek w adresie
-    unresolved_mask = df2[ADDR_COLS].applymap(_is_missing).any(axis=1)
+    CORE_ADDR_COLS = ["Województwo", "Powiat", "Gmina", "Miejscowość"]
+
+    unresolved_mask = df2[CORE_ADDR_COLS].applymap(_is_missing).any(axis=1)
     df2.loc[unresolved_mask, VALUE_COLS] = "Proszę dopisz manualnie"
 
     # wszystko na WIELKIE LITERY (z zachowaniem polskich znaków) dla adresu
