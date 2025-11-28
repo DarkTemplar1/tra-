@@ -95,6 +95,31 @@ def _is_missing(v) -> bool:
     return s == "" or s == "---"
 
 
+# ---------- MAPA MIAST WOJEWÓDZKICH ----------
+
+# klucze = _place_base(nazwa_miasta), wartości = (Województwo, Powiat, Gmina, Miejscowość)
+CAPITAL_MAP = {
+    _place_base("Białystok"): ("Podlaskie", "Białystok", "Białystok", "Białystok"),
+    _place_base("Bydgoszcz"): ("Kujawsko-Pomorskie", "Bydgoszcz", "Bydgoszcz", "Bydgoszcz"),
+    _place_base("Toruń"): ("Kujawsko-Pomorskie", "Toruń", "Toruń", "Toruń"),
+    _place_base("Gdańsk"): ("Pomorskie", "Gdańsk", "Gdańsk", "Gdańsk"),
+    _place_base("Gorzów Wielkopolski"): ("Lubuskie", "Gorzów Wielkopolski", "Gorzów Wielkopolski", "Gorzów Wielkopolski"),
+    _place_base("Katowice"): ("Śląskie", "Katowice", "Katowice", "Katowice"),
+    _place_base("Kielce"): ("Świętokrzyskie", "Kielce", "Kielce", "Kielce"),
+    _place_base("Kraków"): ("Małopolskie", "Kraków", "Kraków", "Kraków"),
+    _place_base("Lublin"): ("Lubelskie", "Lublin", "Lublin", "Lublin"),
+    _place_base("Łódź"): ("Łódzkie", "Łódź", "Łódź", "Łódź"),
+    _place_base("Olsztyn"): ("Warmińsko-Mazurskie", "Olsztyn", "Olsztyn", "Olsztyn"),
+    _place_base("Opole"): ("Opolskie", "Opole", "Opole", "Opole"),
+    _place_base("Poznań"): ("Wielkopolskie", "Poznań", "Poznań", "Poznań"),
+    _place_base("Rzeszów"): ("Podkarpackie", "Rzeszów", "Rzeszów", "Rzeszów"),
+    _place_base("Szczecin"): ("Zachodniopomorskie", "Szczecin", "Szczecin", "Szczecin"),
+    _place_base("Warszawa"): ("Mazowieckie", "Warszawa", "Warszawa", "Warszawa"),
+    _place_base("Wrocław"): ("Dolnośląskie", "Wrocław", "Wrocław", "Wrocław"),
+    _place_base("Zielona Góra"): ("Lubuskie", "Zielona Góra", "Zielona Góra", "Zielona Góra"),
+}
+
+
 # ---------- Wczytanie i przygotowanie TERYT ----------
 
 def load_teryt(teryt_path: str = "teryt.csv") -> pd.DataFrame:
@@ -268,13 +293,29 @@ def _fill_from_source(
 def _enrich_row(row: pd.Series, teryt: pd.DataFrame, sad: pd.DataFrame) -> pd.Series:
     """
     Uzupełnia dziury adresowe w jednym wierszu na podstawie:
-    1) TERYT
-    2) obszar_sadow.xlsx (jako dodatkowe źródło)
+    1) miast wojewódzkich (Warszawa → Mazowieckie/Warszawa/Warszawa/Warszawa)
+    2) TERYT
+    3) obszar_sadow.xlsx (jako dodatkowe źródło)
 
     Brak = puste albo '---'.
     """
     r = row.copy()
 
+    # --- 1) Najpierw specjalna obsługa miast wojewódzkich ---
+    mj_raw_initial = r.get("Miejscowość", "")
+    capital_key = _place_base(mj_raw_initial)
+    if capital_key in CAPITAL_MAP:
+        woj_cap, pow_cap, gmi_cap, mj_cap = CAPITAL_MAP[capital_key]
+        if _is_missing(r.get("Województwo", "")):
+            r["Województwo"] = woj_cap
+        if _is_missing(r.get("Powiat", "")):
+            r["Powiat"] = pow_cap
+        if _is_missing(r.get("Gmina", "")):
+            r["Gmina"] = gmi_cap
+        if _is_missing(r.get("Miejscowość", "")):
+            r["Miejscowość"] = mj_cap
+
+    # --- 2) Normalizacja po ewentualnym uzupełnieniu stolicą ---
     woj_raw = r.get("Województwo", "")
     pow_raw = r.get("Powiat", "")
     gmi_raw = r.get("Gmina", "")
@@ -287,10 +328,10 @@ def _enrich_row(row: pd.Series, teryt: pd.DataFrame, sad: pd.DataFrame) -> pd.Se
     mj_n  = _norm(mj_raw)  if not _is_missing(mj_raw)  else ""
     dz_n  = _norm(dz_raw)  if not _is_missing(dz_raw)  else ""
 
-    # najpierw próbujemy TERYT
+    # --- 3) TERYT ---
     r = _fill_from_source(r, teryt, woj_n, pow_n, gmi_n, mj_n, dz_n)
 
-    # jeśli nadal są braki – próbujemy obszar_sadow.xlsx
+    # --- 4) obszar_sadow, jeśli dalej są braki ---
     if not sad.empty and any(_is_missing(r.get(col, "")) for col in ADDR_COLS):
         r = _fill_from_source(r, sad, woj_n, pow_n, gmi_n, mj_n, dz_n)
 
@@ -315,7 +356,6 @@ def clean_report(path: Path, teryt_path: str = "teryt.csv", sad_path: str = "obs
             df[col] = ""
 
     # Zamień wszystkie '---' w kolumnach adresowych na puste stringi
-    # (żeby wewnętrznie traktować to jak brak)
     for col in ADDR_COLS:
         if col in df.columns:
             df[col] = df[col].apply(
@@ -325,26 +365,23 @@ def clean_report(path: Path, teryt_path: str = "teryt.csv", sad_path: str = "obs
     # statystyka przed (brak = puste lub '---')
     missing_before = (df[ADDR_COLS].applymap(_is_missing)).sum()
 
-    # uzupełnianie (TERYT + obszar_sadow)
+    # uzupełnianie (miasta wojewódzkie + TERYT + obszar_sadow)
     df2 = df.apply(_enrich_row, axis=1, teryt=teryt, sad=sad)
 
     # --- jeśli po uzupełnianiu nadal są braki w KLUCZOWYCH częściach adresu
     #     (Województwo, Powiat, Gmina, Miejscowość),
     #     to w kolumnach VALUE_COLS wpisujemy komunikat
-    #     "Proszę dopisz manualnie".
-    #     Dzielnica jest traktowana jako opcjonalna.
+    #     "Proszę dopisz manualnie". Dzielnica jest opcjonalna.
 
-    # upewnij się, że kolumny wartości istnieją
     for vcol in VALUE_COLS:
         if vcol not in df2.columns:
             df2[vcol] = ""
 
     CORE_ADDR_COLS = ["Województwo", "Powiat", "Gmina", "Miejscowość"]
-
     unresolved_mask = df2[CORE_ADDR_COLS].applymap(_is_missing).any(axis=1)
     df2.loc[unresolved_mask, VALUE_COLS] = "Proszę dopisz manualnie"
 
-    # wszystko na WIELKIE LITERY (z zachowaniem polskich znaków) dla adresu
+    # wszystko na WIELKIE LITERY dla adresu
     for col in ADDR_COLS:
         if col in df2.columns:
             df2[col] = df2[col].astype(str).str.upper()
@@ -355,7 +392,6 @@ def clean_report(path: Path, teryt_path: str = "teryt.csv", sad_path: str = "obs
     # zapis NADPISUJĄCY ten sam plik
     df2.to_excel(path, index=False)
 
-    # proste logi na stdout (widać w konsoli / logach)
     print("CzyszczenieAdresu – statystyka braków (brak = puste lub '---'):")
     print("PRZED:")
     print(missing_before.to_string())
@@ -368,7 +404,7 @@ def clean_report(path: Path, teryt_path: str = "teryt.csv", sad_path: str = "obs
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Uzupełnianie braków adresowych w raporcie na podstawie TERYT + obszar_sadow.xlsx."
+        description="Uzupełnianie braków adresowych w raporcie na podstawie TERYT + obszar_sadow.xlsx + miast wojewódzkich."
     )
     parser.add_argument(
         "raport",
