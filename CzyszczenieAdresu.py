@@ -35,6 +35,13 @@ import math
 
 ADDR_COLS = ["Województwo", "Powiat", "Gmina", "Miejscowość", "Dzielnica"]
 
+# kolumny wartości, w których wpisujemy komunikat jeśli adresu nie da się dopełnić
+VALUE_COLS = [
+    "Średnia cena za m2 ( z bazy)",
+    "Średnia skorygowana cena za m2",
+    "Statystyczna wartość nieruchomości",
+]
+
 # słowa typu "Kolonia", "Osiedle", "Nowa", "Stara" – ignorujemy przy dopasowaniu miejscowości/gminy
 PLACE_GENERIC_WORDS = {
     "kolonia", "kol.", "osiedle", "os.", "nowa", "stara"
@@ -321,7 +328,19 @@ def clean_report(path: Path, teryt_path: str = "teryt.csv", sad_path: str = "obs
     # uzupełnianie (TERYT + obszar_sadow)
     df2 = df.apply(_enrich_row, axis=1, teryt=teryt, sad=sad)
 
-    # wszystko na WIELKIE LITERY (z zachowaniem polskich znaków)
+    # --- NOWOŚĆ: jeśli po uzupełnianiu nadal są braki w adresie,
+    #             to w kolumnach VALUE_COLS wpisujemy komunikat
+    #             "Proszę dopisz manualnie".
+    # najpierw upewniamy się, że kolumny wartości istnieją
+    for vcol in VALUE_COLS:
+        if vcol not in df2.columns:
+            df2[vcol] = ""
+
+    # wiersze, gdzie nadal brakuje czegokolwiek w adresie
+    unresolved_mask = df2[ADDR_COLS].applymap(_is_missing).any(axis=1)
+    df2.loc[unresolved_mask, VALUE_COLS] = "Proszę dopisz manualnie"
+
+    # wszystko na WIELKIE LITERY (z zachowaniem polskich znaków) dla adresu
     for col in ADDR_COLS:
         if col in df2.columns:
             df2[col] = df2[col].astype(str).str.upper()
