@@ -1,0 +1,68 @@
+81 INFO: PyInstaller: 6.16.0, contrib hooks: 2025.9
+81 INFO: Python: 3.11.9
+86 INFO: Platform: Windows-10-10.0.26100-SP0
+86 INFO: Python environment: C:\Users\skalk\PycharmProjects\bloody murder\.venv
+87 INFO: Module search paths (PYTHONPATH):
+['C:\\Users\\skalk\\PycharmProjects\\bloody murder',
+ 'C:\\Users\\skalk\\AppData\\Local\\Programs\\Python\\Python311\\python311.zip',
+ 'C:\\Users\\skalk\\AppData\\Local\\Programs\\Python\\Python311\\DLLs',
+ 'C:\\Users\\skalk\\AppData\\Local\\Programs\\Python\\Python311\\Lib',
+ 'C:\\Users\\skalk\\AppData\\Local\\Programs\\Python\\Python311',
+ 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv',
+ 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages',
+ 'C:\\Users\\skalk\\PycharmProjects\\bloody '
+ 'murder\\.venv\\Lib\\site-packages\\setuptools\\_vendor',
+ 'C:\\Users\\skalk\\PycharmProjects\\bloody murder',
+ 'C:\\Users\\skalk\\PycharmProjects\\bloody murder']
+282 INFO: Appending 'datas' from .spec
+282 INFO: checking Analysis
+282 INFO: Building Analysis because Analysis-00.toc is non existent
+282 INFO: Looking for Python shared library...
+282 INFO: Using Python shared library: C:\Users\skalk\AppData\Local\Programs\Python\Python311\python311.dll
+282 INFO: Running Analysis Analysis-00.toc
+282 INFO: Target bytecode optimization level: 0
+282 INFO: Initializing module dependency graph...
+283 INFO: Initializing module graph hook caches...
+292 INFO: Analyzing modules for base_library.zip ...
+758 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+1090 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+1828 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+2498 INFO: Caching module dependency graph...
+2518 INFO: Analyzing C:\Users\skalk\PycharmProjects\bloody murder\launcher_gui.py
+2541 INFO: Processing pre-find-module-path hook 'hook-tkinter.py' from 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+2541 INFO: TclTkInfo: initializing cached Tcl/Tk info...
+2679 INFO: Processing standard module hook 'hook-_tkinter.py' from 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+2684 INFO: Processing module hooks (post-graph stage)...
+2686 INFO: Processing standard module hook 'hook-_tkinter.py' from 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+2694 INFO: Performing binary vs. data reclassification (926 entries)
+2744 INFO: Looking for ctypes DLLs
+2749 INFO: Analyzing run-time hooks ...
+2749 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+2751 INFO: Including run-time hook 'pyi_rth__tkinter.py' from 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+2751 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\skalk\\PycharmProjects\\bloody murder\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+2763 INFO: Creating base_library.zip...
+2772 INFO: Looking for dynamic libraries
+2844 INFO: Extra DLL search directories (AddDllDirectory): []
+2844 INFO: Extra DLL search directories (PATH): []
+2930 INFO: Warnings written to C:\Users\skalk\PycharmProjects\bloody murder\build\PriceBot\warn-PriceBot.txt
+2939 INFO: Graph cross-reference written to C:\Users\skalk\PycharmProjects\bloody murder\build\PriceBot\xref-PriceBot.html
+2956 INFO: checking PYZ
+2956 INFO: Building PYZ because PYZ-00.toc is non existent
+2956 INFO: Building PYZ (ZlibArchive) C:\Users\skalk\PycharmProjects\bloody murder\build\PriceBot\PYZ-00.pyz
+3046 INFO: Building PYZ (ZlibArchive) C:\Users\skalk\PycharmProjects\bloody murder\build\PriceBot\PYZ-00.pyz completed successfully.
+3054 INFO: checking PKG
+3054 INFO: Building PKG because PKG-00.toc is non existent
+3054 INFO: Building PKG (CArchive) PriceBot.pkg
+4935 INFO: Building PKG (CArchive) PriceBot.pkg completed successfully.
+4945 INFO: Bootloader C:\Users\skalk\PycharmProjects\bloody murder\.venv\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+4945 INFO: checking EXE
+4945 INFO: Building EXE because EXE-00.toc is non existent
+4945 INFO: Building EXE from EXE-00.toc
+4945 INFO: Copying bootloader EXE to C:\Users\skalk\PycharmProjects\bloody murder\dist\PriceBot.exe
+4992 INFO: Copying icon to EXE
+5018 INFO: Copying 0 resources to EXE
+5018 INFO: Embedding manifest in EXE
+5021 INFO: Appending PKG archive to EXE
+5058 INFO: Fixing EXE headers
+6546 INFO: Building EXE from EXE-00.toc completed successfully.
+6556 INFO: Build complete! The results are available in: C:\Users\skalk\PycharmProjects\bloody murder\dist

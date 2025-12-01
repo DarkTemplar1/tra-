@@ -1,71 +1,43 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
+REM ========================================================
+REM        BUILD PriceBot.exe
+REM ========================================================
 
-REM ===================== CONFIG =======================
-set "APP_NAME=PriceBot"
-set "MAIN_FILE=main.py"
-set "LOG=build_debug.log"
-REM =====================================================
+setlocal
 
-REM ===== Lokacja skryptu (niezależna od użytkownika Windows) =====
-set "SCRIPT_DIR=%~dp0"
-cd /d "%SCRIPT_DIR%"
+set APP_NAME=PriceBot
+set SPEC_FILE=PriceBot.spec
 
 echo ========================================
 echo        BUILDING %APP_NAME%.exe
 echo ========================================
 
-REM ===== Szukamy Pythona w .venv, potem globalnie =====
-if exist "%SCRIPT_DIR%\.venv\Scripts\python.exe" (
-    set "PYEXE=%SCRIPT_DIR%\.venv\Scripts\python.exe"
+REM ---- Ścieżka do Pythona z bieżącego folderu ----
+set "SCRIPT_DIR=%~dp0"
+if exist "%SCRIPT_DIR%.venv\Scripts\python.exe" (
+    set "PYTHON_EXE=%SCRIPT_DIR%.venv\Scripts\python.exe"
 ) else (
-    for /f "delims=" %%P in ('where python 2^>nul') do set "PYEXE=%%P"
+    set "PYTHON_EXE=python"
 )
+echo [INFO] Używany Python: %PYTHON_EXE%
 
-if not defined PYEXE (
-    echo [ERROR] Nie znaleziono Python. Zainstaluj Python 3.8+ i dodaj do PATH.
-    echo [ERROR] Budowanie przerwane.
-    pause
-    exit /b 1
+REM ---- Sprzątanie poprzednich buildów ----
+if exist "%SCRIPT_DIR%build" rd /s /q "%SCRIPT_DIR%build"
+if exist "%SCRIPT_DIR%dist" rd /s /q "%SCRIPT_DIR%dist"
+
+echo [INFO] Tworzenie EXE na podstawie %SPEC_FILE%. Log: build_debug.log
+"%PYTHON_EXE%" -m PyInstaller ^
+    --noconfirm ^
+    "%SPEC_FILE%" > build_debug.log 2>&1
+
+echo ---------------------------------------------------------------
+if exist "%SCRIPT_DIR%dist\%APP_NAME%.exe" (
+    echo [OK] GOTOWE: dist\%APP_NAME%.exe
+) else (
+    echo [BŁĄD] Nie znaleziono dist\%APP_NAME%.exe
+    echo       Sprawdź build_debug.log
 )
-
-echo [INFO] Używany Python: %PYEXE%
-
-REM ===== Sprawdzamy PyInstaller i instalujemy jeśli go nie ma =====
-echo [INFO] Sprawdzanie PyInstaller...
-"%PYEXE%" -m PyInstaller --version >nul 2>&1
-if errorlevel 1 (
-    echo [INFO] Instalacja PyInstaller...
-    "%PYEXE%" -m pip install pyinstaller >> "%LOG%" 2>&1
-)
-
-REM ===== Usuwamy poprzednie buildy =====
-if exist build rmdir /s /q build
-if exist dist rmdir /s /q dist
-if exist "%APP_NAME%.spec" del "%APP_NAME%.spec"
-
-REM =================== WYKONANIE BUILD ============================
-echo [INFO] Tworzenie EXE. Log: %LOG%
 echo ---------------------------------------------------------------
 
-"%PYEXE%" -m PyInstaller "%MAIN_FILE%" ^
-    --onefile ^
-    --windowed ^
-    --clean ^
-    --name="%APP_NAME%" ^
-    --add-data "%SCRIPT_DIR%:." ^
-    >> "%LOG%" 2>&1
-
-REM =================== SPRAWDZANIE ================================
-if errorlevel 1 (
-    echo [ERROR] Kompilacja nie powiodła się. Sprawdź plik: %LOG%
-    pause
-    exit /b 1
-)
-
-echo.
-echo [OK] GOTOWE! Utworzono:
-echo    dist\%APP_NAME%.exe
-echo ---------------------------------------------------------------
 pause
-exit /b 0
+endlocal
